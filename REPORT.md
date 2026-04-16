@@ -1,96 +1,135 @@
 # Research Report
 
-**Momentum Variations**<br>
-**Andrew Hall, Brandon Waits, Grant Rich**<br>
-*3/5/26*
+**Project Title:** Synthetic Quality Factor
+**Author(s):** Josh Oldroyd, Grant Rich, Brandon Waits
+**Date:** April 15, 2026
+**Version:** III
 
 ---
 
 ## 1. Summary
 
-This memo investigates two extensions to the standard momentum strategy currently implemented by Silver Fund: idiosyncratic momentum and volatility-scaled momentum. We evaluate idiosyncratic momentum signals constructed from four factor models—CAPM, Fama-French 3-Factor, Fama-French 5-Factor, and the Barra model—and find that signal performance improves monotonically with the explanatory power of the underlying factor model, with Barra idiosyncratic momentum achieving the highest Sharpe ratio among residual-based signals. We then apply volatility scaling to the top-performing signals and show that it improves risk-adjusted returns for both standard and idiosyncratic momentum. While standard volatility-scaled momentum achieves the highest full-sample Sharpe ratio, we demonstrate that volatility-scaled Barra idiosyncratic momentum exhibits substantially stronger performance during the COVID-19 crash period, consistent with its reduced exposure to systematic factor reversals. Based on these findings, we recommend replacing Silver Fund's current standard momentum signal with volatility-scaled Barra idiosyncratic momentum.
+This project investigates construction of a synthetic quality factor by applying cross-sectional OLS spanning regressions to MSCI Barra quality factor exposures. Four signal constructions are evaluated against static baselines derived from AQR's Quality Minus Junk (QMJ) framework: a 50/50 QMJ proxy, a QARP (quality + value) blend, a static equal-weight composite, and an OLS-estimated composite targeting the equal-weight signal.
 
-- Sources:
+The central finding is that the empirically estimated OLS equal-weight composite (`ols_ew`) dominates all baselines on a risk-adjusted basis. Weight stability (CV < 0.11 across all five factors) confirms the OLS solution is well-conditioned, rendering ridge regularization unnecessary. The signal carries significant FF5 alpha, is 80% orthogonal to the existing production signal set, and contributes an incremental residual Sharpe of 0.29, supporting its addition to the production portfolio.
 
-Blitz, D., Pang, H., & van Vliet, P. (2013). The idiosyncratic momentum anomaly. Journal of Business & Economic Statistics, 31(1), 44–56. https://doi.org/10.1080/07350015.2012.723155
+The Bayesian approaches included in experiments done by Grant and Brandon are not outlined in the report below. We discuss only the latest research that was performed.
+
+### Key Metrics
+
+| Metric                                  | Value     | Notes                                            |
+|--------|-------|-------|
+| `ols_ew` Sharpe Ratio                   | 1.75      | Full sample 1996–2024, MVO backtest |
+| FF5 Alpha (intercept t-stat)            | 6.38      | Significant profitability and value tilts |
+| Residual Sharpe (orthogonality test)    | 0.29      | After projecting out 3 production signal alphas |
+| Multivariate R² vs. production signals  | ~0.20     | 80% of variance orthogonal to existing portfolio |
+| Max factor CV (`ols_ew`)                | 0.11      | Confirms temporal stability of OLS weights |
 
 ---
 
-Hanauer, M. X., & Lauterbach, R. (2023). Enhanced momentum strategies. Journal of Banking & Finance, 154, 106939. https://doi.org/10.1016/j.jbankfin.2023.106939
-
 ## 2. Data Requirements
 
-Experiments require Barra and Fama-French data, all found within the Silver Fund data collection.
- 
+**Sources**
+- MSCI Barra factor exposures
+- CRSP returns
+
+**Rate of Availability**
+- Daily factor exposures; signal constructed at monthly cross-sections
+
+**Inputs Required**
+- Five Barra quality-related factor exposures per stock per date: `USSLOWL_PROFIT`, `USSLOWL_EARNQLTY`, `USSLOWL_MGMTQLTY`, `USSLOWL_LEVERAGE`, `USSLOWL_GROWTH`
+
+**Preprocessing**
+- $5 price filter applied prior to portfolio construction
+- Portfolios constrained to zero market beta and zero investment
+- Gamma calibrated to target ~5% active risk over the full sample period
+
 ---
 
 ## 3. Approach / System Design
 
-The economic intuition for the momentum anomaly has been extensively discussed within Silver Fund, specifically the underreaction hypothesis. In this memo, we focus on the rationale for idiosyncratic and volatility-scaled momentum. Standard momentum, as currently implemented by Silver Fund, uses total return momentum, implying that higher-momentum stocks may be high-momentum because the underlying factors they’re exposed to outperform. In reality, the underreaction hypothesis primarily concerns investors' underreaction to firm-specific information.  By using the idiosyncratic component, we can isolate this effect without incorporating unwanted factor risk. Furthermore, volatility scaling addresses the crash risk of standard momentum while limiting the strategy to selecting stocks solely on the basis of high volatility. 
+**Economic Intuition.** The quality premium reflects durable mispricing of safe, profitable firms driven by behavioral biases. This structural persistence motivates fixed-weight rather than dynamic construction — timing error is introduced without benefit when the premium does not require timing.
 
-### Factor Model Specifications
-In our research, we consider four distinct factor models to calculate the idiosyncratic component.
+**Static Baselines.** Two static composites serve as benchmarks: (1) **QMJ** — 50/50 blend of `PROFIT` and `EARNQLTY` (Sharpe 1.38); (2) **Equal-Weight QMJ** — all five Barra quality factors with AQR-motivated signs (+,+,+,−,−), equally weighted (Sharpe 1.75).
 
-| Model | Equation |
-| :--- | :--- |
-| **CAPM** | <img src="https://github.com/user-attachments/assets/5c0eb1a4-513d-48dd-a63f-41bf54de743d" width="400"> |
-| **Fama-French 3** | <img src="https://github.com/user-attachments/assets/0617a5a5-e197-4be2-8161-3e672988db64" width="400"> |
-| **Fama-French 5** | <img src="https://github.com/user-attachments/assets/34391a23-8c81-4d32-9416-454cbda323c6" width="400"> |
-| **Barra Factor Model** | <img src="https://github.com/user-attachments/assets/b2bbfcf7-7168-4536-a9dc-00364802cef6" width="400"> |
+**OLS Spanning Regression.** At each monthly cross-section, stock-level factor exposures are regressed against a target signal (either the QMJ proxy or the equal-weight composite). Coefficients are averaged across the time series to produce stable static weights. This is the primary construction methodology.
 
-In our research, we examined the performance of idiosyncratic momentum across these factor models. We recognized that using a residual from a factor model with fewer factors would inherently trade momentum on the excluded factors. However, we didn’t know if that would ever be desired or if we should always use Barra. When consulting with Brandon, we received the following explanation for why the idiosyncratic component from Barra is superior:
+**Ridge Robustness Check.** Bayesian ridge regression was also implemented (minimizing `||y - Xw||² + λ||w - w₀||²`) to assess whether multicollinearity among Barra factors required regularization. Ridge coefficients were nearly identical to OLS (e.g., LEVERAGE: −0.3963 OLS vs. −0.3883 tight ridge), confirming OLS is sufficient.
 
-Suppose the true model of returns is $r_{it} = \sum_{j=1}^{k} \beta_{ij}f_{jt} + e_{it}$. So, you have $k + 1$ things you could forecast if you knew the true model. Suppose there are $Q$ possible actual factor models to choose from to estimate and you choose model $q$. Suppose your proposed factor model is $r_{it} = \sum_{j=1}^{m^q} \gamma_{ij}^q g_{jt}^q + u_{it}^q$, giving you a maximum of $m^q + 1$ things to actually forecast. You can create a momentum signal on those $m^q + 1$ individually or any version of $\sum_{j \in J} \gamma_{ij}^q g_{jt}^q + u_{it}^q$, where $J$ is the set of all subsets of natural numbers up to $m^q$ and including or excluding the "idiosyncratic" term, $u^q$. The cleanest version is computing [signal] separately on each factor and on the idiosyncratic term. Computing [signal] on any of the subsets assumes that the loadings $g^q$ are the same as the optimal signal weights you would have used to combine the signals computed on each component separately, which is weakly suboptimal. The next point is which $q \in Q$ to pick. Pick the one that best explains the contemporaneous cross-section of returns, which is Barra.
-
-The signal construction process begins with standard Momentum, which is calculated by taking daily log returns, applying a 230-day rolling sum for each stock, and shifting the result by 21 days to create a $t_{12} - t_{2}$ time period. To extract the idiosyncratic portion for subsequent signals (excluding Barra), a rolling OLS regression is performed using a desired factor model such as CAPM, FF3, or FF5 to generate beta coefficients. For Idiosyncratic Momentum (CAPM, FF3, FF5), these coefficients are used to subtract the predicted factor returns from each stock’s excess return, followed by the standard momentum calculation on the remaining values. Idiosyncratic Momentum (Barra) is constructed by taking the daily log of the Barra-specific return for each stock and performing a 230-day rolling sum shifted by 21 days. Finally, Volatility Scaled Momentum follows the standard signal construction process but adds a step where each rolling return is divided by its rolling 230-day standard deviation before the 21-day shift is applied.
+**Design Decision.** Dynamic BMA (Bayesian Model Averaging) specifications were tested and uniformly underperformed static constructions, reinforcing the static approach. 
 
 ---
 
 ## 4. Code Structure
 
-```text
-sf-research-momentum/
+```
+sf-research-bayesian-quality/
 ├── research/
-│   ├── experiments/
-│   │   └── [All experiment files]
-│   ├── signals/
-│   │   └── [Signal construction images]
-│   └── utils/
-│       ├── __init__.py
-│       ├── backtest.py
-│       └── mvo.py
-├── results/
-│   └── [All experiment results files]
-└── README.md
+│   ├── josh_experiments/
+│   │   ├── experiment_##.py      # Different experiments for signal construction
+├── results/josh/
+│   ├── experiment_#/             # Plots and charts for results from experiments
+└── REPORT.md
+
 ```
 
 ---
 
-## 5. Performance Discussion
+## 5. Results / Evaluation
 
-The experimental process begins by constraining portfolios to a zero beta relative to the market and ensuring portfolio weights sum to zero, while applying a $5 price filter prior to construction. For each signal, a gamma is selected to achieve approximately 5% active risk over the period from 1996-07-31 to 2024-12-31, with weights and forward returns then used to highlight performance across the full sample. Standard momentum is constructed by taking daily log returns, applying a 230-day rolling sum, and shifting by 21 days. Idiosyncratic momentum for CAPM, FF3, and FF5 requires a rolling OLS regression to extract residuals by subtracting predicted factor returns from each stock's excess return, while the Barra version uses the daily log of specific returns. Volatility-scaled momentum adds a step of dividing each rolling return by its rolling 230-day standard deviation. Analysis of non-volatility-scaled signals shows that while standard momentum has the highest Sharpe ratio, increasing the number of factors in idiosyncratic models—culminating in the Barra model—improves the strategy's Sharpe ratio. Although volatility scaling improves performance for both standard and Barra idiosyncratic signals, standard momentum maintains a higher Sharpe ratio in the full sample. However, the idiosyncratic momentum strategy is shown to be preferable because it is less affected by market crashes, as evidenced by its significantly higher Sharpe ratio during the COVID-19 sample period from 2019-01-01 to 2022-12-31.
+**Signal Performance Summary (MVO Backtest, 1996–2024)**
 
-In conclusion, we find that signal performance improves monotonically with the explanatory power of the underlying factor model, volatility scaling improves all momentum variations, and idiosyncratic momentum outperforms standard momentum during the COVID-19 pandemic. Accordingly, we vote to replace the current standard momentum signal with volatility-scaled Barra idiosyncratic momentum in the Silver Fund portfolio.
+| Signal | Mean Return | Volatility | Sharpe |
+|--------|-------------|------------|--------|
+| `ols_ew` (primary) | 8.54% | 4.89% | **1.75** |
+| `ols_qmj` | 8.32% | 5.92% | 1.41 |
+| QMJ (50/50 baseline) | 4.97% | 3.60% | 1.38 |
+| Equal-Weight QMJ (static) | 5.04% | 2.88% | 1.75 |
+
+**FF5 Regression (`ols_ew`)**
+
+| Variable | Coefficient | T-stat |
+|----------|-------------|--------|
+| Intercept | 0.0226 | **6.38** |
+| mkt_rf | 0.0133 | 4.09 |
+| hml | 0.0413 | 7.31 |
+| rmw | 0.0963 | 12.43 |
+| cma | 0.0001 | 0.01 |
+
+**Orthogonality Test (`ols_ew` residual vs. production portfolio)**
+
+| Mean Return | Volatility | Sharpe |
+|-------------|------------|--------|
+| 1.24% | 4.32% | 0.29 |
+
+Pairwise correlations with production signals — beta: 0.39, barra_reversal: 0.005, ivol: 0.41. Multivariate R² ≈ 0.20.  Forgot to include other production signals, will do in continued research.
 
 ---
 
-## Appendix: Figures and Results
+## 6. Performance Discussion
 
-| Description | Visualization |
-| :--- | :--- |
-| **Figure 1:** Standard Momentum Signal | <img width="792" height="638" alt="Image" src="https://github.com/user-attachments/assets/744a6f5f-c1c6-4d36-9c22-c9a9fa16cb15" /> |
-| **Figure 2:** Fama-French 3 Idiosyncratic Momentum | <img width="1154" height="1070" alt="Image" src="https://github.com/user-attachments/assets/9dcabe23-dd38-43d3-82c1-e754429aa6cc" /> |
-| **Figure 3:** Barra Idiosyncratic Momentum | <img width="1120" height="638" alt="Image" src="https://github.com/user-attachments/assets/3b82a6da-b8c4-4724-a0a1-3d9516c73457" /> |
-| **Figure 4:** Volatility-Scaled Momentum | <img width="1198" height="692" alt="Image" src="https://github.com/user-attachments/assets/cf68284b-512b-46d2-90c4-21b9cb0ce1d6" /> |
+**Strengths.** The `ols_ew` signal achieves the highest Sharpe ratio of all constructions tested, is empirically grounded, and its weights are highly stable across nearly three decades (max CV = 0.11). The FF5 regression confirms economically interpretable tilts (profitability, value) and significant alpha. The 80% orthogonality to existing production signals supports genuine diversification benefit (inasmuch as it was executed correctly).
 
-### Full Sample Backtests (Non-Volatility Scaled)
-| Chart | Data Table |
-| :---: | :---: |
-| <img width="1966" height="926" alt="Image" src="https://github.com/user-attachments/assets/38db8f2a-8a83-47da-b165-b7ab2e4250d9" /> | <img width="786" height="516" alt="Image" src="https://github.com/user-attachments/assets/3288f91f-9624-48ba-9920-69a69160762c" /> |
-| *Figure 5: Full Sample Active Backtest Chart* | *Figure 6: Full Sample Active Backtest Table* |
+**Weaknesses.** The `ols_ew` Sharpe matches the naive equal-weight static construction (both 1.75), meaning OLS provides validation and interpretability but not a raw Sharpe improvement over the simpler equal-weight rule in this case. QARP underperforms QMJ on a risk-adjusted basis, suggesting the 50/50 value blend is too blunt; a better combination mechanism may exist.
 
-### Volatility-Scaled & COVID-19 Analysis
-| Analysis Type | Chart | Table |
-| :--- | :---: | :---: |
-| **Full Sample (Volatility-Scaled)** | ![Fig 7](https://github.com/user-attachments/assets/81120634-dff9-4cdb-8969-82622dd74f25)<br><i>Figure 7: Full Sample Performance Chart (Volatility-Scaled)</i> | ![Fig 8](https://github.com/user-attachments/assets/71f5da71-7b00-4a45-b925-0de6b2b03054)<br><i>Figure 8: Full Sample Performance Metrics (Volatility-Scaled)</i> |
-| **COVID-19 Period** | ![Fig 9](https://github.com/user-attachments/assets/192e1bb9-46ba-483e-b294-5c96ecda3de8)<br><i>Figure 9: COVID-19 Period Performance Chart</i> | ![Fig 10](https://github.com/user-attachments/assets/74ea823a-0edf-4e8f-b7b6-ed529c8b4dd7)<br><i>Figure 10: COVID-19 Period Performance Metrics</i> |
+---
+
+## 7. Limitations
+
+- **Missing features:** An improved combination mechanism for QARP has not been developed, and the orthogonality test likely needs to be modified.
+- **Risks:** Weight stability over 1996–2024 does not guarantee stability in future regimes. The $5 price filter and zero-beta constraint may limit generalizability.
+- **Open questions:** Can a dynamic quality construction outperform static in a properly validated out-of-sample framework? Is there an optimal blend of `ols_ew` and value to reconstruct QARP? How can we validate it?
+
+---
+
+## 8. Future Work
+
+- Develop an improved weighting mechanism for QARP
+- Assure that the orthogonality test is conducted correctly and considers all production signals
+- Pursue additional testing as requested by the team prior to vote
+
+---
+
+## Appendix (Optional)
+
+Elected to opt out thanks to optionality.
